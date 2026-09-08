@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Activity, ArrowRight, Check, ChevronDown, CircleGauge, LockKeyhole, RefreshCw, ShieldCheck, Sparkles, TriangleAlert, WalletCards } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
@@ -17,13 +17,13 @@ export default function Home() {
   const [market, setMarket] = useState<Market>(fallback);
   const [loading, setLoading] = useState(true);
   const [step, setStep] = useState<'draft' | 'checked' | 'ready'>('draft');
-  const [advanced, setAdvanced] = useState(false);
   const [scenario, setScenario] = useState<Scenario>('baseline');
   const [receipt, setReceipt] = useState<DecisionReceipt | null>(null);
   const [evaluatedAt, setEvaluatedAt] = useState(() => new Date().toISOString());
   const [proofMode, setProofMode] = useState(false);
 
-  async function refreshMarket() {
+  const refreshMarket = useCallback(async () => {
+    if (proofMode) return;
     setLoading(true);
     try {
       const response = await fetch('/api/market', { cache: 'no-store' });
@@ -32,10 +32,9 @@ export default function Home() {
       setEvaluatedAt(new Date().toISOString());
     } catch { setMarket(fallback); }
     finally { setLoading(false); }
-  }
+  }, [proofMode]);
 
   // The URL selects an immutable recorded proof state before any network refresh.
-  // oxlint-disable-next-line react/react-compiler
   useEffect(() => {
     if (new URLSearchParams(window.location.search).get('proof') === 'mcp') {
       setProofMode(true);
@@ -45,7 +44,7 @@ export default function Home() {
       return;
     }
     void refreshMarket();
-  }, []);
+  }, [refreshMarket]);
   useEffect(() => {
     const context = (document as WebMcpDocument).modelContext;
     if (!context?.registerTool) return;
@@ -53,7 +52,7 @@ export default function Home() {
     void Promise.resolve(context.registerTool({
       name: 'evaluate_trade_proposal',
       title: 'Evaluate trade proposal',
-      description: 'Run an independent, fail-closed Failsafe firewall evaluation and return a tamper-evident decision receipt. This never executes a trade.',
+      description: 'Evaluate agent-supplied evidence against Failsafe policy and return a reproducible decision receipt. This never executes a trade or attests to evidence provenance.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -71,13 +70,14 @@ export default function Home() {
       annotations: { readOnlyHint: false, untrustedContentHint: false },
       async execute(input: unknown) {
         const value = input as { proposalId?: string; spendUsd?: number; change24hPercent?: number; marketObservedAt?: string; accountTotalUsdt?: number | null; accountAvailableUsdt?: number | null; priorWindowSpendUsd?: number };
-        if (!value.proposalId || typeof value.spendUsd !== 'number' || value.spendUsd <= 0 || typeof value.change24hPercent !== 'number' || !value.marketObservedAt || typeof value.priorWindowSpendUsd !== 'number') throw new Error('proposal input is incomplete or invalid');
+        const { proposalId, spendUsd, change24hPercent, marketObservedAt, priorWindowSpendUsd } = value;
+        if (typeof proposalId !== 'string' || !proposalId.trim() || typeof spendUsd !== 'number' || !Number.isFinite(spendUsd) || spendUsd <= 0 || typeof change24hPercent !== 'number' || !Number.isFinite(change24hPercent) || typeof marketObservedAt !== 'string' || !marketObservedAt || typeof priorWindowSpendUsd !== 'number' || !Number.isFinite(priorWindowSpendUsd) || priorWindowSpendUsd < 0) throw new Error('proposal input is incomplete or invalid');
         const account = typeof value.accountTotalUsdt === 'number' && typeof value.accountAvailableUsdt === 'number' ? { totalUsdt: value.accountTotalUsdt, availableUsdt: value.accountAvailableUsdt } : null;
         const proposed: TradeProposal = {
-          proposalId: value.proposalId, symbol: 'BTCUSDT', side: 'BUY', spendUsd: value.spendUsd, createdAt: evaluatedAt,
-          market: { source: market.source, observedAt: value.marketObservedAt, price: market.price, change24hPercent: value.change24hPercent, spreadPercent: market.spreadPercent }, account,
+          proposalId, symbol: 'BTCUSDT', side: 'BUY', spendUsd, createdAt: evaluatedAt,
+          market: { source: 'Agent-supplied evidence via WebMCP', observedAt: marketObservedAt, price: market.price, change24hPercent, spreadPercent: market.spreadPercent }, account,
         };
-        const history: ProposalRecord[] = value.priorWindowSpendUsd > 0 ? [{ proposalId: `${value.proposalId}-prior`, symbol: 'BTCUSDT', side: 'BUY', spendUsd: value.priorWindowSpendUsd, createdAt: new Date(Date.parse(evaluatedAt) - 300_000).toISOString() }] : [];
+        const history: ProposalRecord[] = priorWindowSpendUsd > 0 ? [{ proposalId: `${proposalId}-prior`, symbol: 'BTCUSDT', side: 'BUY', spendUsd: priorWindowSpendUsd, createdAt: new Date(Date.parse(evaluatedAt) - 300_000).toISOString() }] : [];
         const decision = await evaluateProposal(proposed, defaultPolicy, history, evaluatedAt);
         setReceipt(decision);
         setStep(decision.status === 'blocked' ? 'draft' : 'checked');
@@ -102,6 +102,8 @@ export default function Home() {
   useEffect(() => { void evaluateProposal(proposal, defaultPolicy, history, evaluatedAt).then(setReceipt); }, [proposal, history, evaluatedAt]);
   const blocked = receipt?.status !== 'ready_for_human_approval';
   const allocation = useMemo(() => (proposal.spendUsd / market.price).toFixed(6), [proposal.spendUsd, market.price]);
+  const auditTime = receipt ? `${receipt.evaluatedAt.slice(11, 19)}Z` : 'awaiting decision';
+  const sourceDot = proofMode ? 'snapshot-dot' : market.source.startsWith('Live ·') ? 'live-dot' : 'stale-dot';
 
   return (
     <main className="app-shell">
@@ -113,50 +115,51 @@ export default function Home() {
 
       <section className="mission-strip">
         <div><span className="eyebrow">CURRENT MISSION</span><strong>Build BTC exposure without breaking my rules.</strong></div>
-        <div className="mission-meta"><span>Policy <b>Conservative v2</b></span><span>Mode <b>Human approval</b></span></div>
+        <div className="mission-meta"><span>Policy <b>Conservative v3</b></span><span>Mode <b>Human approval</b></span></div>
       </section>
 
       <div className="workspace">
         <section className="left-rail">
           <div className="rail-label">01 · INTENT</div>
           <h1>Plan the trade.<br/><em>Prove it’s safe.</em></h1>
-          <p className="lede">Failsafe converts a trading goal into a bounded order. Every assumption stays visible. Nothing executes without you.</p>
+          <p className="lede">Failsafe converts a trading goal into a bounded order. Every assumption stays visible. The public demo evaluates only; it never executes.</p>
           <div className="prompt-card">
-            <label htmlFor="intent">YOUR INTENT</label>
-            <textarea id="intent" defaultValue="Buy $250 of BTC if momentum is positive, but don't chase a move above 4%. Keep at least 70% of my USDT unallocated." />
-            <div className="prompt-footer"><span><Sparkles size={14}/> Parsed into 4 constraints</span><button aria-label="Regenerate plan"><RefreshCw size={15}/></button></div>
+            <label htmlFor="intent">EXAMPLE INTENT</label>
+            <textarea id="intent" readOnly aria-readonly="true" defaultValue="Buy $250 of BTC if momentum is positive, but don't chase a move above 4%. Keep at least 70% of my USDT unallocated." />
+            <div className="prompt-footer"><span><Sparkles size={14}/> Reference policy: 4 visible constraints</span><span className="demo-chip">READ ONLY</span></div>
           </div>
           <div className="guardrails">
-            <div className="section-title"><span>GUARDRAILS</span><button onClick={() => setAdvanced(!advanced)}>{advanced ? 'Hide' : 'Tune'} limits</button></div>
+            <div className="section-title"><span>GUARDRAILS</span></div>
             <PolicyRow icon={<WalletCards/>} title="Order cap" value="$250.00" note="Single-order maximum"/>
             <PolicyRow icon={<CircleGauge/>} title="Portfolio exposure" value="30% max" note="70% must remain in USDT"/>
             <PolicyRow icon={<Activity/>} title="Momentum ceiling" value="+4.00%" note="Block if 24h move exceeds limit"/>
-            {advanced && <PolicyRow icon={<TriangleAlert/>} title="Daily loss limit" value="1.50%" note="Freeze execution if breached"/>}
+            <PolicyRow icon={<Activity/>} title="Liquidity limit" value="0.10%" note="Maximum bid/ask spread"/>
           </div>
           <div className="attack-lab">
             <div className="section-title"><span>ADVERSARIAL CHECKS</span><em>{proofMode ? 'RECORDED PROOF' : 'LIVE INPUT'}</em></div>
             <div className="scenario-buttons">
-              <button className={scenario==='baseline'?'active':''} onClick={()=>setScenario('baseline')}>MCP proof</button>
+              <button className={scenario==='baseline'?'active':''} onClick={()=>setScenario('baseline')}>{proofMode ? 'MCP proof' : 'Baseline order'}</button>
               <button className={scenario==='oversize'?'active':''} onClick={()=>setScenario('oversize')}>$500 order</button>
               <button className={scenario==='split'?'active':''} onClick={()=>setScenario('split')}>Split order</button>
               <button className={scenario==='stale'?'active':''} onClick={()=>setScenario('stale')}>Stale data</button>
             </div>
           </div>
-          <div className="scope-row"><div><LockKeyhole size={16}/><span><b>Execution lock</b><small>Binance requires approval for every order</small></span></div><Switch checked={false} disabled aria-label="Execution locked"/></div>
+          <div className="scope-row"><div><LockKeyhole size={16}/><span><b>Execution lock</b><small>Public demo has no Binance Trade scope</small></span></div><Switch checked={false} disabled aria-label="Execution locked"/></div>
         </section>
 
         <section className="decision-room">
-          <div className="decision-head"><div><span className="eyebrow">02 · DECISION PACKET</span><h2>BTC / USDT</h2></div><button className="refresh" onClick={refreshMarket} aria-label="Refresh market data"><RefreshCw className={loading ? 'spin' : ''} size={17}/></button></div>
-          <div className="price-row"><div><span className="price">${market.price.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span><span className={market.change >= 0 ? 'positive' : 'negative'}>{market.change >= 0 ? '+' : ''}{market.change.toFixed(2)}%</span></div><span className="source"><span className="live-dot"/>{market.source}</span></div>
-          <div className="chart" aria-label="BTC intraday price trend">
+          <div className="decision-head"><div><span className="eyebrow">02 · DECISION PACKET</span><h2>BTC / USDT</h2></div><button className="refresh" onClick={refreshMarket} disabled={proofMode || loading} aria-label={proofMode ? 'Recorded MCP evidence cannot be refreshed' : 'Refresh market data'}><RefreshCw className={loading ? 'spin' : ''} size={17}/></button></div>
+          <div className="price-row"><div><span className="price">${market.price.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span><span className={market.change >= 0 ? 'positive' : 'negative'}>{market.change >= 0 ? '+' : ''}{market.change.toFixed(2)}%</span></div><span className="source"><span className={sourceDot}/>{market.source}</span></div>
+          <div className="chart" aria-label="Illustrative BTC price path; Failsafe evaluates the quoted evidence above">
             <div className="chart-grid"><span>81.6K</span><i/><span>79.6K</span><i/><span>77.5K</span><i/></div>
-            <svg viewBox="0 0 600 140" aria-label="Rising BTC price line">
+            <svg viewBox="0 0 600 140" aria-label="Illustrative BTC price path">
               <defs><linearGradient id="area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#f0b90b" stopOpacity=".3"/><stop offset="1" stopColor="#f0b90b" stopOpacity="0"/></linearGradient></defs>
               <path d={`M0 125 ${bars.map((v,i)=>`L${(i/(bars.length-1))*600} ${140-v}`).join(' ')} L600 140 L0 140Z`} fill="url(#area)"/>
               <path d={`M0 125 ${bars.map((v,i)=>`L${(i/(bars.length-1))*600} ${140-v}`).join(' ')}`} fill="none" stroke="#f0b90b" strokeWidth="3"/>
               <circle cx="600" cy={140-bars[bars.length-1]} r="5" fill="#f0b90b" stroke="#171915" strokeWidth="3"/>
             </svg>
             <div className="chart-labels"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>NOW</span></div>
+            <span className="chart-context">Illustrative context — not decision evidence</span>
           </div>
           <div className="checks">
             <CheckRow label="Momentum" value={`${receipt?.checks.momentum.observed ?? 'evaluating'} / positive, +4.00% max`} status={(receipt?.checks.momentum.status ?? 'unverified').toUpperCase()} block={receipt?.checks.momentum.status==='block'} unverified={receipt?.checks.momentum.status==='unverified'}/>
@@ -164,6 +167,7 @@ export default function Home() {
             <CheckRow label="Rolling exposure" value={`${receipt?.checks.rollingExposure.observed ?? 'evaluating'} / $250.00 per 10m`} status={(receipt?.checks.rollingExposure.status ?? 'unverified').toUpperCase()} block={receipt?.checks.rollingExposure.status==='block'}/>
             <CheckRow label="Account evidence" value={receipt?.checks.cashRetention.observed ?? 'evaluating'} status={(receipt?.checks.cashRetention.status ?? 'unverified').toUpperCase()} block={receipt?.checks.cashRetention.status==='block'} unverified={receipt?.checks.cashRetention.status==='unverified'}/>
             <CheckRow label="Market freshness" value={`${receipt?.checks.marketFreshness.observed ?? 'evaluating'} / 60s max`} status={(receipt?.checks.marketFreshness.status ?? 'unverified').toUpperCase()} block={receipt?.checks.marketFreshness.status==='block'} unverified={receipt?.checks.marketFreshness.status==='unverified'}/>
+            <CheckRow label="Liquidity" value={`${receipt?.checks.liquidity.observed ?? 'evaluating'} / 0.10% spread max`} status={(receipt?.checks.liquidity.status ?? 'unverified').toUpperCase()} block={receipt?.checks.liquidity.status==='block'} unverified={receipt?.checks.liquidity.status==='unverified'}/>
           </div>
           <div className={`verdict ${blocked ? 'blocked' : step !== 'draft' ? 'checked' : ''}`}>
             <div className="verdict-icon">{blocked ? <TriangleAlert/> : step === 'draft' ? <ShieldCheck/> : <Check/>}</div>
@@ -174,14 +178,14 @@ export default function Home() {
         <aside className="order-panel">
           <div><span className="eyebrow">03 · PROPOSED ORDER</span><h2>One last look.</h2></div>
           <dl className="order-spec"><div><dt>Market</dt><dd>BTC / USDT</dd></div><div><dt>Side</dt><dd className="buy">BUY</dd></div><div><dt>Type</dt><dd>Market</dd></div><div><dt>Spend</dt><dd>${proposal.spendUsd.toFixed(2)}</dd></div><div><dt>Est. receive</dt><dd>{allocation} BTC</dd></div></dl>
-          <div className="boundary"><div><LockKeyhole size={17}/><b>Permission boundary</b></div><p>Failsafe cannot withdraw funds. Binance will show the final order and ask you to confirm.</p></div>
+          <div className="boundary"><div><LockKeyhole size={17}/><b>Permission boundary</b></div><p>No Trade scope is connected to this public demo. A production adapter would require a cleared receipt before Binance&apos;s final confirmation.</p></div>
           <div className="receipt-card"><span>DECISION RECEIPT</span><code>{receipt?.receiptId ?? 'evaluating…'}</code><div><small>Policy</small><b>{receipt?.policyVersion ?? defaultPolicy.version}</b></div><div><small>Execution</small><b>NOT STARTED</b></div><div className="reason-list">{receipt?.reasons.map(reason=><i key={reason}>{reason.replaceAll('_',' ')}</i>)}</div></div>
           <Button className="approve" disabled={blocked} onClick={() => setStep(step === 'draft' ? 'checked' : 'ready')}>
-            {blocked ? 'Capability withheld' : step === 'draft' ? 'Request human approval' : step === 'checked' ? 'Prepare Binance handoff' : 'Approval packet prepared'}
+            {blocked ? 'Capability withheld' : step === 'draft' ? 'Review approval packet' : 'Approval packet reviewed'}
             {blocked ? <LockKeyhole/> : step === 'ready' ? <Check/> : <ArrowRight/>}
           </Button>
-          <p className="microcopy">No trade is placed in this demo. Live execution is handed to Binance MCP with human confirmation.</p>
-          <div className="audit"><span>AUDIT TRAIL</span><code>4 checks · 0 overrides · {new Date().toISOString().slice(11,19)}Z</code></div>
+          <p className="microcopy">No trade can be placed here: this public demo has no Binance Trade scope or account access.</p>
+          <div className="audit"><span>AUDIT TRAIL</span><code>6 firewall checks · 0 execution calls · {auditTime}</code></div>
         </aside>
       </div>
     </main>

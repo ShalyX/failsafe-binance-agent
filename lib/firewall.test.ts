@@ -43,11 +43,33 @@ void test('fails closed when account evidence is missing', async () => {
   assert.ok(receipt.reasons.includes('account_evidence_missing'));
 });
 
+void test('fails closed when account evidence is malformed', async () => {
+  const receipt = await evaluateProposal(proposal({ account: { totalUsdt: Number.NaN, availableUsdt: 1_000 } }), defaultPolicy, [], NOW);
+  assert.equal(receipt.status, 'blocked');
+  assert.ok(receipt.reasons.includes('account_evidence_invalid'));
+  assert.equal(receipt.checks.cashRetention.status, 'block');
+});
+
+void test('uses unallocated balance, not total balance, for cash retention', async () => {
+  const receipt = await evaluateProposal(proposal({ spendUsd: 250, account: { totalUsdt: 1_000, availableUsdt: 800 } }), defaultPolicy, [], NOW);
+  assert.equal(receipt.status, 'blocked');
+  assert.ok(receipt.reasons.includes('cash_retention_below_minimum'));
+  assert.equal(receipt.checks.cashRetention.observed, '55.0%');
+});
+
 void test('fails closed when market evidence is stale', async () => {
   const stale = { ...proposal().market!, observedAt: '2026-09-08T19:58:00.000Z' };
   const receipt = await evaluateProposal(proposal({ market: stale }), defaultPolicy, [], NOW);
   assert.equal(receipt.status, 'blocked');
   assert.ok(receipt.reasons.includes('market_evidence_stale'));
+});
+
+void test('fails closed when market evidence is malformed', async () => {
+  const market = { ...proposal().market!, price: -1, spreadPercent: -0.01 };
+  const receipt = await evaluateProposal(proposal({ market }), defaultPolicy, [], NOW);
+  assert.equal(receipt.status, 'blocked');
+  assert.ok(receipt.reasons.includes('market_evidence_invalid'));
+  assert.equal(receipt.checks.liquidity.status, 'block');
 });
 
 void test('blocks an order above the single-order cap', async () => {
@@ -63,6 +85,13 @@ void test('detects split-order evasion inside the rolling window', async () => {
   assert.equal(receipt.checks.rollingExposure.observedUsd, 275);
 });
 
+void test('fails closed when rolling history contains an invalid spend', async () => {
+  const history = [{ proposalId: 'prior-001', symbol: 'BTCUSDT', side: 'BUY' as const, spendUsd: -1_000, createdAt: '2026-09-08T19:55:00.000Z' }];
+  const receipt = await evaluateProposal(proposal({ spendUsd: 250 }), defaultPolicy, history, NOW);
+  assert.equal(receipt.status, 'blocked');
+  assert.ok(receipt.reasons.includes('history_evidence_invalid'));
+});
+
 void test('does not count a retry with the same proposal id twice', async () => {
   const retry = proposal({ spendUsd: 200 });
   const history = [{ proposalId: retry.proposalId, symbol: retry.symbol, side: retry.side, spendUsd: retry.spendUsd, createdAt: retry.createdAt }];
@@ -71,7 +100,7 @@ void test('does not count a retry with the same proposal id twice', async () => 
   assert.equal(receipt.checks.rollingExposure.observedUsd, 200);
 });
 
-void test('produces the same tamper-evident receipt for the same inputs', async () => {
+void test('produces the same reproducible receipt for the same inputs', async () => {
   const first = await evaluateProposal(proposal(), defaultPolicy, [], NOW);
   const second = await evaluateProposal(proposal(), defaultPolicy, [], NOW);
   assert.equal(first.receiptId, second.receiptId);
