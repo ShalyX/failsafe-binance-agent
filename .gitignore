@@ -5,4 +5,5 @@ dist/
 .wrangler/
 .playwright-cli/
 tsconfig.tsbuildinfo
+next-env.d.ts
 *.log
