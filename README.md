@@ -24,6 +24,8 @@ Most trading agents optimize for finding a trade. Failsafe optimizes for knowing
 - The execution boundary follows Binance MCP semantics: least-privilege scopes, no withdrawal scope, and confirmation before each trading action.
 - The interface exposes a WebMCP tool, `stage_policy_checked_order`, so another agent can stage the same visible safety review without executing a trade.
 
+See the timestamped [verified Binance MCP read](evidence/BINANCE-MCP-READ.md), where Failsafe used genuine market data and blocked an order whose positive-momentum condition was not met.
+
 ## Run locally
 
 ```bash
