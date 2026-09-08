@@ -2,6 +2,8 @@
 
 Failsafe is a policy-first trading copilot built for the Binance Agent OS Mini Hackathon. It converts a natural-language trading goal into a visible decision packet, evaluates the order against explicit guardrails, and only then prepares an execution handoff for Binance MCP's own confirmation flow.
 
+**[Open the live demo](https://failsafe-binance-agent.mires-falcons5v.chatgpt.site)**
+
 ## Why it exists
 
 Most trading agents optimize for finding a trade. Failsafe optimizes for knowing when an agent must stop. It makes the boundary between analysis, policy, approval, and execution legible to the user.
