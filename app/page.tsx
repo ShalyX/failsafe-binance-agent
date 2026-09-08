@@ -7,6 +7,7 @@ import { Switch } from '@/components/ui/switch';
 
 type Market = { price: number; change: number; high: number; low: number; volume: number; source: string };
 const fallback: Market = { price: 80142.2, change: 2.41, high: 81680, low: 77542, volume: 32184, source: 'Demo snapshot' };
+const verifiedMcpSnapshot: Market = { price: 78400.01, change: -0.983, high: 79980, low: 77542, volume: 32184, source: 'Verified MCP snapshot · Sep 8' };
 const bars = [31, 40, 37, 49, 55, 51, 63, 59, 71, 68, 78, 74, 87, 83, 92, 89, 96, 93, 104, 99, 112, 108, 118, 115];
 type WebMcpDocument = Document & { modelContext?: { registerTool: (tool: Record<string, unknown>, options?: { signal?: AbortSignal }) => void | Promise<void> } };
 
@@ -15,6 +16,7 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [step, setStep] = useState<'draft' | 'checked' | 'ready'>('draft');
   const [advanced, setAdvanced] = useState(false);
+  const momentumPass = market.change > 0 && market.change <= 4;
 
   async function refreshMarket() {
     setLoading(true);
@@ -26,7 +28,14 @@ export default function Home() {
     finally { setLoading(false); }
   }
 
-  useEffect(() => { refreshMarket(); }, []);
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('proof') === 'mcp') {
+      setMarket(verifiedMcpSnapshot);
+      setLoading(false);
+      return;
+    }
+    refreshMarket();
+  }, []);
   useEffect(() => {
     const context = (document as WebMcpDocument).modelContext;
     if (!context?.registerTool) return;
@@ -51,12 +60,16 @@ export default function Home() {
         if (typeof value.spendUsd !== 'number' || value.spendUsd > 250 || value.spendUsd < 1) throw new Error('spendUsd must be between 1 and 250');
         if (typeof value.maxMomentumPercent !== 'number' || value.maxMomentumPercent > 4 || value.maxMomentumPercent < .1) throw new Error('maxMomentumPercent must be between 0.1 and 4');
         if (typeof value.minimumCashRetainedPercent !== 'number' || value.minimumCashRetainedPercent < 70 || value.minimumCashRetainedPercent > 100) throw new Error('minimumCashRetainedPercent must be between 70 and 100');
+        if (!momentumPass) {
+          setStep('draft');
+          return { status: 'blocked', reason: 'momentum_not_positive', execution: 'not_started', requiresHumanApproval: false };
+        }
         setStep('checked');
         return { status: 'policy_verified', execution: 'not_started', requiresHumanApproval: true };
       },
     }, { signal: lifecycle.signal })).catch(() => undefined);
     return () => lifecycle.abort();
-  }, []);
+  }, [momentumPass]);
   const allocation = useMemo(() => (250 / market.price).toFixed(6), [market.price]);
 
   return (
@@ -94,7 +107,7 @@ export default function Home() {
 
         <section className="decision-room">
           <div className="decision-head"><div><span className="eyebrow">02 · DECISION PACKET</span><h2>BTC / USDT</h2></div><button className="refresh" onClick={refreshMarket} aria-label="Refresh market data"><RefreshCw className={loading ? 'spin' : ''} size={17}/></button></div>
-          <div className="price-row"><div><span className="price">${market.price.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span><span className="positive">{market.change >= 0 ? '+' : ''}{market.change.toFixed(2)}%</span></div><span className="source"><span className="live-dot"/>{market.source}</span></div>
+          <div className="price-row"><div><span className="price">${market.price.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span><span className={market.change >= 0 ? 'positive' : 'negative'}>{market.change >= 0 ? '+' : ''}{market.change.toFixed(2)}%</span></div><span className="source"><span className="live-dot"/>{market.source}</span></div>
           <div className="chart" aria-label="BTC intraday price trend">
             <div className="chart-grid"><span>81.6K</span><i/><span>79.6K</span><i/><span>77.5K</span><i/></div>
             <svg viewBox="0 0 600 140" role="img" aria-label="Rising BTC price line">
@@ -106,14 +119,14 @@ export default function Home() {
             <div className="chart-labels"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>NOW</span></div>
           </div>
           <div className="checks">
-            <CheckRow label="Momentum" value={`${market.change >= 0 ? '+' : ''}${market.change.toFixed(2)}% / +4.00% max`} status={market.change <= 4 ? 'PASS' : 'BLOCK'}/>
+            <CheckRow label="Momentum" value={`${market.change >= 0 ? '+' : ''}${market.change.toFixed(2)}% / positive, +4.00% max`} status={momentumPass ? 'PASS' : 'BLOCK'} block={!momentumPass}/>
             <CheckRow label="Order size" value="$250.00 / $250.00 max" status="AT LIMIT" warn/>
             <CheckRow label="Cash retained" value="74.8% / 70.0% min" status="PASS"/>
             <CheckRow label="Liquidity" value="0.02% est. price impact" status="PASS"/>
           </div>
-          <div className={`verdict ${step !== 'draft' ? 'checked' : ''}`}>
-            <div className="verdict-icon">{step === 'draft' ? <ShieldCheck/> : <Check/>}</div>
-            <div><span className="eyebrow">AGENT VERDICT</span><h3>{step === 'draft' ? 'Safe to prepare' : step === 'checked' ? 'Policy verified' : 'Approval packet ready'}</h3><p>{step === 'draft' ? 'All four policy checks pass. Review the order packet before sending it to Binance.' : 'The plan is bounded, reversible before execution, and requires your explicit confirmation.'}</p></div>
+          <div className={`verdict ${!momentumPass ? 'blocked' : step !== 'draft' ? 'checked' : ''}`}>
+            <div className="verdict-icon">{!momentumPass ? <TriangleAlert/> : step === 'draft' ? <ShieldCheck/> : <Check/>}</div>
+            <div><span className="eyebrow">AGENT VERDICT</span><h3>{!momentumPass ? 'Policy blocked' : step === 'draft' ? 'Safe to prepare' : step === 'checked' ? 'Policy verified' : 'Approval packet ready'}</h3><p>{!momentumPass ? '24-hour momentum is not positive. Failsafe will not prepare or hand off this order.' : step === 'draft' ? 'All four policy checks pass. Review the order packet before sending it to Binance.' : 'The plan is bounded, reversible before execution, and requires your explicit confirmation.'}</p></div>
           </div>
         </section>
 
@@ -122,9 +135,9 @@ export default function Home() {
           <dl className="order-spec"><div><dt>Market</dt><dd>BTC / USDT</dd></div><div><dt>Side</dt><dd className="buy">BUY</dd></div><div><dt>Type</dt><dd>Market</dd></div><div><dt>Spend</dt><dd>$250.00</dd></div><div><dt>Est. receive</dt><dd>{allocation} BTC</dd></div></dl>
           <div className="boundary"><div><LockKeyhole size={17}/><b>Permission boundary</b></div><p>Failsafe cannot withdraw funds. Binance will show the final order and ask you to confirm.</p></div>
           <div className="impact"><span>AFTER THIS ORDER</span><div><small>USDT retained</small><b>74.8%</b></div><div className="meter"><i/></div><p>Inside your 70% minimum</p></div>
-          <Button className="approve" onClick={() => setStep(step === 'draft' ? 'checked' : 'ready')}>
-            {step === 'draft' ? 'Run final safety check' : step === 'checked' ? 'Prepare Binance approval' : 'Approval packet prepared'}
-            {step === 'ready' ? <Check/> : <ArrowRight/>}
+          <Button className="approve" disabled={!momentumPass} onClick={() => setStep(step === 'draft' ? 'checked' : 'ready')}>
+            {!momentumPass ? 'Order blocked by policy' : step === 'draft' ? 'Run final safety check' : step === 'checked' ? 'Prepare Binance approval' : 'Approval packet prepared'}
+            {!momentumPass ? <LockKeyhole/> : step === 'ready' ? <Check/> : <ArrowRight/>}
           </Button>
           <p className="microcopy">No trade is placed in this demo. Live execution is handed to Binance MCP with human confirmation.</p>
           <div className="audit"><span>AUDIT TRAIL</span><code>4 checks · 0 overrides · {new Date().toISOString().slice(11,19)}Z</code></div>
@@ -137,6 +150,6 @@ export default function Home() {
 function PolicyRow({icon,title,value,note}:{icon:React.ReactNode,title:string,value:string,note:string}) {
   return <div className="policy-row"><span className="policy-icon">{icon}</span><span><b>{title}</b><small>{note}</small></span><strong>{value}</strong></div>;
 }
-function CheckRow({label,value,status,warn=false}:{label:string,value:string,status:string,warn?:boolean}) {
-  return <div className="check-row"><span className={`check-icon ${warn?'warn':''}`}>{warn?'!':<Check size={13}/>}</span><b>{label}</b><span>{value}</span><em className={warn?'warn-text':''}>{status}</em></div>;
+function CheckRow({label,value,status,warn=false,block=false}:{label:string,value:string,status:string,warn?:boolean,block?:boolean}) {
+  return <div className="check-row"><span className={`check-icon ${warn?'warn':''} ${block?'block':''}`}>{warn?'!':block?'×':<Check size={13}/>}</span><b>{label}</b><span>{value}</span><em className={warn?'warn-text':block?'block-text':''}>{status}</em></div>;
 }
