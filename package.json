@@ -9,7 +9,8 @@
     "dev": "vinext dev",
     "build": "vinext build",
     "start": "wrangler dev --config dist/server/wrangler.json",
-    "lint": "oxlint",
+    "test": "node --test lib/firewall.test.ts",
+    "lint": "oxlint app lib -A react/react-compiler",
     "format": "oxfmt"
   },
   "dependencies": {
