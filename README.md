@@ -4,6 +4,8 @@ Failsafe is an execution-firewall prototype for trading agents, built for the Bi
 
 **[Open the live demo](https://failsafe-binance-agent.mires-falcons5v.chatgpt.site)**
 
+[![M8ven Verified](https://m8ven.ai/badge/mcp/shalyx-failsafe-binance-agent-1sul8o?variant=verified&v=0587df7be8f1ff651e796178219e45c9)](https://m8ven.ai/mcp/shalyx-failsafe-binance-agent-1sul8o)
+
 ## Why it exists
 
 Most trading agents keep planning and policy inside the same prompt. That lets a hallucinating, compromised, or overly eager planner rationalize its own exception. Failsafe models a deterministic policy boundary between the planning agent and Binance MCP.
