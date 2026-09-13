@@ -4,7 +4,7 @@ Failsafe is an execution-firewall prototype for trading agents, built for the Bi
 
 **[Open the live demo](https://failsafe-binance-agent.mires-falcons5v.chatgpt.site)**
 
-[![M8ven Verified](https://m8ven.ai/badge/mcp/shalyx-failsafe-binance-agent-1sul8o?variant=verified&v=bd3a344400eef13dc2caf135b565cfcc)](https://m8ven.ai/mcp/shalyx-failsafe-binance-agent-1sul8o)
+[![M8ven Verified](https://m8ven.ai/badge/mcp/shalyx/failsafe-binance-agent?variant=verified)](https://m8ven.ai/mcp/shalyx/failsafe-binance-agent)
 
 ## Why it exists
 
